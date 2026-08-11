@@ -1,7 +1,7 @@
 # MVC2 Audio Tool
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/70c784f7-51d6-408c-a789-f6eec3e08b42" width="300" />
+  <img src="https://github.com/user-attachments/assets/70c784f7-51d6-408c-a789-f6eec3e08b42" width="500" />
 </div>
 
 Herramienta con interfaz gráfica para **extraer, escuchar, editar y reemplazar** las voces/audios empaquetados en los archivos `.bin` de **Marvel vs. Capcom 2**, respetando el **orden real del secuenciador del juego** (el mismo orden que se usa para el doblaje).
