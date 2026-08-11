@@ -1,0 +1,9 @@
+﻿__pycache__/
+*.pyc
+*.log
+*.exe
+*.spec
+build/
+dist/
+*.ico
+.DS_Store
