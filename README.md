@@ -39,6 +39,12 @@ Esta herramienta:
 - **Extracción cruda o a WAV**: podés sacar todos los samples del `.bin` tal cual están comprimidos, o ya decodificados a `.wav` listos para escuchar en cualquier reproductor.
 - **Log** de todo lo que hace el programa, tanto en pantalla como guardado en `MVC2_AudioTool.log`.
 
+
+
+
+<img width="876" height="646" alt="image" src="https://github.com/user-attachments/assets/70c784f7-51d6-408c-a789-f6eec3e08b42" />
+
+
 ---
 
 ## Formatos de audio que entiende
