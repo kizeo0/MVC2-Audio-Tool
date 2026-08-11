@@ -42,7 +42,7 @@ Esta herramienta:
 
 
 
-<img width="876" height="646" alt="image" src="https://github.com/user-attachments/assets/70c784f7-51d6-408c-a789-f6eec3e08b42" />
+<img width="500" height="500" alt="image" src="https://github.com/user-attachments/assets/70c784f7-51d6-408c-a789-f6eec3e08b42" />
 
 
 ---
