@@ -128,4 +128,4 @@ El proyecto incluye `MVC2_AudioTool.spec` y `compilar.bat` para generar un ejecu
 
 ## Licencia
 
-_(Completar según corresponda — por ejemplo, uso personal/no comercial para modding, dado que trabaja con archivos protegidos de un juego de Capcom.)_
+no comercial para modding, dado que trabaja con archivos protegidos de un juego de Capcom.
