@@ -1,0 +1,9 @@
+# Opcional. Copialo como "rutas.txt" junto al .py / .exe y ajusta tus rutas.
+# Sirve para compartir el tool: cada máquina apunta a sus propias carpetas.
+# Líneas con # son comentarios. Si no existe este archivo no cambia nada.
+
+# Carpeta con los takes latinos (contiene snd_pl00/wav, snd_pl01/wav, ...):
+# LATINO=F:\MVC2\LATINO PC\sound\se\mvc2
+
+# Carpeta con los DTPK de PS3 (puente para ordenar los slots por contenido):
+# GDROM=C:\juego\UP0102-NPUB30068_00-MARVELVCAPCOM2FG\USRDIR\gdrom

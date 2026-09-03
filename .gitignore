@@ -7,3 +7,5 @@ build/
 dist/
 *.ico
 .DS_Store
+ps2_bridge_cache.json
+_span_cache.json

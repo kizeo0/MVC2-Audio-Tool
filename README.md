@@ -107,6 +107,32 @@ assets/
 
 ---
 
+## Versión PS2 (`FOR PS2/`)
+
+Edición **v2** para los `.bin` de voces de la versión de **PlayStation 2** (`pl##_voi.bin` del `AFS01.AFS`).
+
+Diferencias con la versión PS3/DC:
+
+- Formato PS2 **HD/BD (IECS)** con samples **VAG ADPCM** en slots fijos (con end-marker); incluye inyección directa en el `AFS01.AFS` (crea `.bak` solo si no existe).
+- La lista, la extracción y el reempaque van en **orden de voz** (n.º de take = n.º de track DTPK, igual que la carpeta latina), aunque los slots vengan revueltos en el `.bin`.
+- El orden se obtiene por **puente DTPK por contenido**: cada slot se compara contra los samples del DTPK homónimo de PS3 (mismo idioma original) y de ahí sale track → take. La duración nunca ordena (solo indica si el take cabe en el slot).
+- La columna de estado dice cómo salió cada par: `puente`, `fijo oído`, `doblado` (el slot ya traía ese take), `revisar oído` o `sin wav`. Los takes que comparten sample/slot y las voces ausentes en el port se reportan en `_orden_latino.txt`.
+
+Carpeta `FOR PS2/`:
+
+```
+FOR PS2/
+MVC2_PS2_AudioTool.py   (tool v2 PS2)
+DTPKDump.py             (parseo del secuenciador)
+ps2_map_fix.txt         (pares verificados a oído, mandan sobre todo)
+ps2_map_div.txt         (tasa por slot: juego divide o no)
+rutas-ejemplo.txt       (copiar a rutas.txt para apuntar LATINO/GDROM propios)
+```
+
+Reusa `assets/` de la raíz (retratos) y necesita `DTPKDump.py` y `ffmpeg.exe` al lado (igual que la versión PS3). Para ordenar necesita los DTPK de PS3 homónimos (misma carpeta que el `.bin`, o `GDROM=` en `rutas.txt`); sin puente usa solo lo verificado a oído. Los `.exe` distribuidos ya llevan la caché del puente adentro.
+
+---
+
 ## Compilar tu propio .exe
 
 El proyecto incluye `MVC2_AudioTool.spec` y `compilar.bat` para generar un ejecutable único con [PyInstaller](https://pyinstaller.org/), con `ffmpeg.exe`, `DTPKDump.py`, el ícono y toda la carpeta `assets/` empaquetados adentro (no incluye `ffplay.exe` ni `ffprobe.exe`, no se usan).
