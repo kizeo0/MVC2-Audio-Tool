@@ -1381,11 +1381,23 @@ def _rank_slot_vs_samples(sl, e_rate, samp_pcm, samp_rates, tol=0.30):
     return scored
 
 
+def _bridge_entry_to_res(ent, res):
+    try:
+        for k, v in ent['slots'].items():
+            res[int(k)] = {'sample': v[0], 'track': v[1], 'tracks': v[2],
+                           'score': v[3], 'eff': v[4], 'method': v[5]}
+        return True
+    except:
+        return False
+
+
 def build_bridge_for_ps2(bin_path, entries, bd, log=None):
     # Puente por CONTENIDO slot PS2 <-> sample DTPK (mismo idioma).
     # Retorna {slot: {'sample':, 'track': (principal), 'tracks': [...],
     #                 'score':, 'eff':, 'method': 'dtpk'|'dub'}}.
-    # Sin puente DTPK retorna {}. La DURACIÓN no interviene en nada.
+    # La caché vale por CONTENIDO del .bin: si el .bin es idéntico al de
+    # la caché distribuida con el .exe, ordena sin necesitar el DTPK.
+    # Sin caché ni puente retorna {}. La DURACIÓN no interviene en nada.
     if log is None:
         def log(m):
             pass
@@ -1395,28 +1407,43 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
         pid = base.split('_')[0].lower()
         if not pid.startswith('pl'):
             return res
+        try:
+            sig_bin = f'{pid}|{_sig_file(bin_path)}'
+        except:
+            sig_bin = None
         bridge = find_dtpk_bridge(bin_path)
-        if not bridge:
+        cache = _bridge_cache_load()
+        if bridge:
+            try:
+                sig = f'{sig_bin}|{_sig_file(bridge)}'
+            except:
+                try:
+                    bst = os.stat(bridge)
+                    dst = os.stat(bin_path)
+                    sig = f'{pid}|{dst.st_size}|{dst.st_mtime_ns}|{bst.st_size}|{bst.st_mtime_ns}'
+                except:
+                    sig = None
+            if sig:
+                ent = cache.get(sig)
+                if isinstance(ent, dict) and ent.get('v') == BRIDGE_CACHE_V and ent.get('slots'):
+                    if _bridge_entry_to_res(ent, res):
+                        return res
+        elif sig_bin:
+            # Sin DTPK local: buscar entrada compatible con este .bin
+            # (caché distribuida con el .exe). Mismo contenido = mismo mapa.
+            prefix = sig_bin + '|'
+            for k, ent in cache.items():
+                if not isinstance(ent, dict) or ent.get('v') != BRIDGE_CACHE_V or not ent.get('slots'):
+                    continue
+                if isinstance(k, str) and k.startswith(prefix):
+                    if _bridge_entry_to_res(ent, res):
+                        log('Mapa desde caché distribuida (sin DTPK local).')
+                        return res
             log('Puente DTPK no encontrado (se usa solo lo verificado a oido).')
             return res
-        bst = os.stat(bridge)
-        try:
-            sig = f'{pid}|{_sig_file(bin_path)}|{_sig_file(bridge)}'
-        except:
-            try:
-                dst = os.stat(bin_path)
-                sig = f'{pid}|{dst.st_size}|{dst.st_mtime_ns}|{bst.st_size}|{bst.st_mtime_ns}'
-            except:
-                sig = f'{pid}|{bst.st_size}|{bst.st_mtime_ns}'
-        cache = _bridge_cache_load()
-        ent = cache.get(sig)
-        if isinstance(ent, dict) and ent.get('v') == BRIDGE_CACHE_V and ent.get('slots'):
-            for k, v in ent['slots'].items():
-                try:
-                    res[int(k)] = {'sample': v[0], 'track': v[1], 'tracks': v[2],
-                                   'score': v[3], 'eff': v[4], 'method': v[5]}
-                except:
-                    pass
+        else:
+            return res
+        if not bridge:
             return res
         dtpk_data = open(bridge, 'rb').read()
         vtracks = dtpk_voice_tracks(dtpk_data)
