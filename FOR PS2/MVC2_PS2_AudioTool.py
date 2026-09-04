@@ -2287,6 +2287,60 @@ def _hd_is_half_family(hd_rate):
     except:
         return False
 
+def _take_spd_rate(bin_path, tgroup, tnum):
+    # Tasa SPD del take concreto (para aviso de pitch). Digest; None si no hay.
+    try:
+        dall = _digest_all_groups(bin_path)
+        ti = (dall.get(tgroup) or {}).get(tnum)
+        if not ti:
+            return None
+        rr = sorted(ti.get('rates') or [])
+        return rr[0] if len(rr) == 1 else None
+    except:
+        return None
+
+
+def _pitch_note(bin_path, slot, hd_rate, srates, take_num, tgroup=0, method=None):
+    # Aviso cuando la tasa de juego difiere mucho del SPD del propio take
+    # en una VOZ (take<30): o el port la toca a otro pitch (bug real del
+    # port, como en la Collection) o el dato de división está mal. Solo
+    # aviso, no cambia nada: verificar en juego. No aplica a takes ya
+    # doblados (el slot trae el take) ni a SFX (take>=30).
+    try:
+        if take_num is None or take_num >= 30:
+            return ''
+        if method == 'dub':
+            return ''
+        if not hd_rate:
+            return ''
+        spd = _take_spd_rate(bin_path, tgroup, take_num)
+        if spd:
+            ref = [spd]
+        elif srates:
+            ref = [r for r in srates]
+        else:
+            return ''
+        if not ref:
+            return ''
+        try:
+            div = _slot_divided(bin_path, slot)
+        except:
+            div = None
+        if div is None:
+            try:
+                div = _ps2_is_divided(bin_path, slot, hd_rate, srates)
+            except:
+                div = None
+        if div is None:
+            div = _hd_is_half_family(hd_rate)
+        play = max(1, hd_rate // 2) if div else max(1, hd_rate)
+        best = min(abs(play - r) / r for r in ref if r)
+        if best > 0.25:
+            return ' [!]'
+        return ''
+    except:
+        return ''
+
 def _rates_match(hd_rate, spd_rate, multiple=1, tol=0.15):
     try:
         if not hd_rate or not spd_rate:
@@ -2473,7 +2527,8 @@ def latino_map_for_ps2(bin_path, entries):
                 detail[s] = {'track': tkey[1], 'tgroup': tkey[0],
                              'sample': b.get('sample'),
                              'score': 1.0, 'method': 'fijo',
-                             'tracks': b.get('tracks', [list(tkey)])}
+                             'tracks': b.get('tracks', [list(tkey)]),
+                             'srates': b.get('srates', [])}
         # resto del puente
         for s, b in bridge.items():
             if s in merged:
@@ -2484,7 +2539,8 @@ def latino_map_for_ps2(bin_path, entries):
                 detail[s] = {'track': tkey[1], 'tgroup': tkey[0],
                              'sample': b.get('sample'),
                              'score': b.get('score'), 'method': b.get('method'),
-                             'tracks': b.get('tracks', [list(tkey)])}
+                             'tracks': b.get('tracks', [list(tkey)]),
+                             'srates': b.get('srates', [])}
         _LAST_BRIDGE['bin'] = os.path.abspath(bin_path)
         _LAST_BRIDGE['detail'] = detail
         return merged
@@ -4481,6 +4537,16 @@ class App:
                 except:
                     _tr = e['rate']
                 display_rate = f"{_tr} Hz" if _tr == e['rate'] else f"{_tr} Hz (HD {e['rate']})"
+                try:
+                    _kk = _take_key(lmap.get(idx)) if idx in lmap else None
+                    if _kk is not None:
+                        _dd = bdet.get(idx, {}) or {}
+                        _pn = _pitch_note(self.session.get('path', ''), idx, e['rate'],
+                                          _dd.get('srates'), _kk[1], _kk[0], _dd.get('method'))
+                        if _pn:
+                            display_rate += ' [!]'
+                except:
+                    pass
                 dur_ms = int(((e['size']-16)//16*28 / max(1,_tr) *1000) if e['size']>16 else 0)
                 if is_blank:
                     est = 'blank'
@@ -4579,7 +4645,15 @@ class App:
                            'dub': 'doblado', 'dudoso': 'dudoso'}.get(d.get('method'), '?')
                     _vk = _take_key(lmap[s])
                     _vt = _orden_txt_for_key(_vk, _vpid) if _vk else os.path.basename(lmap[s])[-7:-4]
-                    self.log(f"  voz {_vt} <- slot {s:02d} [{tag}]")
+                    _pn = ''
+                    try:
+                        if _vk is not None:
+                            _e2 = next((x for x in p['entries'] if x['index'] == s), None)
+                            if _e2 is not None and _pitch_note(path, s, _e2['rate'], d.get('srates'), _vk[1], _vk[0], d.get('method')):
+                                _pn = ' [PITCH: juego vs original difieren, verificar en juego]'
+                    except:
+                        pass
+                    self.log(f"  voz {_vt} <- slot {s:02d} [{tag}]{_pn}")
             # Filas en ORDEN POR VOZ ascendente (como la carpeta de latinos y
             # el PS3: 00, 03, 04...). Sin mapeo van al final por slot.
             # El iid sigue siendo el índice (la selección no cambia).
