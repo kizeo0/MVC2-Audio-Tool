@@ -1475,10 +1475,31 @@ def _rank_slot_vs_samples(sl, e_rate, samp_pcm, samp_rates, tol=0.30):
     return scored
 
 
-def _bridge_entry_to_res(ent, res):
+def _digest_sample_rates(bin_path, sample):
+    # Tasas SPD del sample vía digest (sin DTPK). Para rellenar cachés
+    # viejas que no guardaban srates.
+    try:
+        dg = _digest_tracks(bin_path)
+        if not dg or sample is None:
+            return []
+        out = set()
+        for tnum, tinfo in dg.items():
+            if sample in (tinfo.get('samples') or []):
+                out.update(tinfo.get('rates') or [])
+        return sorted(out)
+    except:
+        return []
+
+
+def _bridge_entry_to_res(ent, res, bin_path=None):
     try:
         for k, v in ent['slots'].items():
             sr = list(v[6]) if len(v) > 6 and isinstance(v[6], list) else []
+            if not sr and bin_path is not None:
+                try:
+                    sr = _digest_sample_rates(bin_path, v[0])
+                except:
+                    sr = []
             res[int(k)] = {'sample': v[0], 'track': v[1], 'tracks': v[2],
                            'score': v[3], 'eff': v[4], 'method': v[5],
                            'srates': sr}
@@ -1521,18 +1542,19 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                     sig = None
             if sig:
                 ent = cache.get(sig)
-                if isinstance(ent, dict) and ent.get('v') == BRIDGE_CACHE_V and ent.get('slots'):
-                    if _bridge_entry_to_res(ent, res):
+                if isinstance(ent, dict) and ent.get('v') in (8, BRIDGE_CACHE_V) and ent.get('slots'):
+                    if _bridge_entry_to_res(ent, res, bin_path):
                         return res
         elif sig_bin:
             # Sin DTPK local: buscar entrada compatible con este .bin
             # (caché distribuida con el .exe). Mismo contenido = mismo mapa.
+            # Vale v8+ (mismo formato de firmas; srates se rellenan vía digest).
             prefix = sig_bin + '|'
             for k, ent in cache.items():
-                if not isinstance(ent, dict) or ent.get('v') != BRIDGE_CACHE_V or not ent.get('slots'):
+                if not isinstance(ent, dict) or ent.get('v') not in (8, BRIDGE_CACHE_V) or not ent.get('slots'):
                     continue
                 if isinstance(k, str) and k.startswith(prefix):
-                    if _bridge_entry_to_res(ent, res):
+                    if _bridge_entry_to_res(ent, res, bin_path):
                         log('Mapa desde caché distribuida (sin DTPK local).')
                         return res
             log('Puente DTPK no encontrado (se usa solo lo verificado a oido).')
