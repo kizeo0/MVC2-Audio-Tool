@@ -254,6 +254,8 @@ CHARACTERS = {
     'pl35': 'Blackheart', 'pl36': 'Thanos', 'pl37': 'Jin',
     'pl38': 'Captain Commando', 'pl39': 'Bonerine',
     'pl3a': 'Kobun / Servbot',
+    'se_comn': 'Efectos comunes', 'se_staf': 'Staff / ending',
+    'se_syuk': 'Attract / syuk',
 }
 
 PREVIEW_WAV = os.path.join(tempfile.gettempdir(), 'mvc2_preview.wav')
@@ -876,6 +878,12 @@ DTPK_BRIDGE_CANDIDATES = [
     r'C:\Users\WinterOS\Downloads\Telegram Desktop\MARVEL VS CAPCOM 2 - MOD LATINO - 1.0 - NPUB30068\MARVEL VS CAPCOM 2 - MOD LATINO - 1.0 - NPUB30068\UP0102-NPUB30068_00-MARVELVCAPCOM2FG\USRDIR\gdrom',
 ]
 
+# Puentes EXTRA (se prueban solo para slots que el primario no cubrió;
+# la correlación decide: solo suma si el audio coincide).
+DTPK_BRIDGE_EXTRA_CANDIDATES = [
+    r'F:\MVC2\mod latino ps3 completo\USRDIR\gdrom',
+]
+
 # Tracks del bloque de gruñidos repetidos: existen en el secuenciador pero
 # nunca tienen take latino (verificado en los 59 pjs). No se mapean.
 GRUNT_TRACKS = {40, 41, 42, 43}
@@ -941,17 +949,72 @@ def _load_rutas_override():
 
 _load_rutas_override()
 
+# Pids con doblaje además de personajes: comunes/staff del juego.
+SE_PIDS = ('se_comn', 'se_staf', 'se_syuk')
+
+def _pid_of_bin(bin_path):
+    # pl1b_voi -> pl1b ; se_comn.bin / se_comn_voi.bin -> se_comn
+    try:
+        base = os.path.splitext(os.path.basename(bin_path))[0].lower()
+        if base.endswith('_voi'):
+            base = base[:-4]
+        return base
+    except:
+        return ''
+
+def _is_dub_pid(pid):
+    try:
+        return pid.startswith('pl') or pid in SE_PIDS
+    except:
+        return False
+
+def _latino_subdirs(pid):
+    # Rutas relativas a probar dentro de cada root de latinos.
+    try:
+        if pid in SE_PIDS:
+            return [os.path.join('snd_' + pid[3:], 'wav')]  # se_comn -> snd_comn/wav
+        if pid.startswith('pl'):
+            return [os.path.join('snd_' + pid, 'wav'), 'wav']
+    except:
+        pass
+    return []
+
+def _take_key(wav_path):
+    # Identidad del take: (grupo, numero). mvc2_prg01_10.wav -> (1,10);
+    # variantes loop (prg00_30_loop) -> mismo take (gana la loop).
+    # Resto (pl/staf/syuk) -> (0,NN). None si no parsea.
+    try:
+        bn = os.path.basename(wav_path)
+        m = re.search(r'prg(\d+)_(\d+)(?:_loop)?\.wav$', bn, re.I)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+        m = re.search(r'_(\d+)(?:_loop)?\.wav$', bn, re.I)
+        if m:
+            return (0, int(m.group(1)))
+    except:
+        pass
+    return None
+
+def _orden_txt_for_key(key, pid=None):
+    # Texto corto de voz para la columna Orden.
+    try:
+        g, n = key
+        if pid == 'se_comn':
+            return '%d-%02d' % (g, n)
+        return '%02d' % n
+    except:
+        return '?'
+
 def _find_latino_wavs(bin_path):
     # Lista ordenada de wavs latinos (sin blank) para el pid del bin, o [].
     try:
-        base = os.path.splitext(os.path.basename(bin_path))[0]
-        pid = base.split('_')[0].lower()  # pl1b
-        if not pid.startswith('pl'):
+        pid = _pid_of_bin(bin_path)
+        if not _is_dub_pid(pid):
             return []
         roots = list(LATINO_PC_CANDIDATES) + [os.path.dirname(os.path.abspath(bin_path))]
         for root in roots:
-            for cand in (os.path.join(root, f'snd_{pid}', 'wav'),
-                         os.path.join(root, 'wav')):
+            for sub in _latino_subdirs(pid):
+                cand = os.path.join(root, sub)
                 if os.path.isdir(cand):
                     import glob as _g
                     wavs = sorted(_g.glob(os.path.join(cand, '*.wav')))
@@ -1156,10 +1219,38 @@ def find_dtpk_bridge(bin_path):
         return None
 
 
-def dtpk_voice_tracks(dtpk_data):
-    # {track: {'samples': [s...], 'rates': set(hz), 'spds': [...]}} grupo 0,
-    # lista COMPLETA (sin filtro de únicos: importan joins y compartidos).
-    # El grupo 1 es espejo (mismos tracks y samples), no se usa.
+def find_dtpk_bridges_extra(bin_path, primary):
+    # Puentes extra homónimos (para slots que el primario no cubrió).
+    out = []
+    try:
+        name = os.path.basename(bin_path)
+        seen = set()
+        if primary:
+            try:
+                seen.add(os.path.abspath(primary))
+            except:
+                pass
+        for root in DTPK_BRIDGE_EXTRA_CANDIDATES:
+            c = os.path.join(root, name)
+            try:
+                if os.path.isfile(c) and os.path.abspath(c) not in seen:
+                    with open(c, 'rb') as f:
+                        magic = f.read(4)
+                    if magic == b'DTPK':
+                        out.append(c)
+                        seen.add(os.path.abspath(c))
+            except:
+                pass
+    except:
+        pass
+    return out
+
+
+def dtpk_voice_tracks(dtpk_data, group=0):
+    # {track: {'samples': [s...], 'rates': set(hz), 'spds': [...]}} del grupo
+    # indicado, lista COMPLETA (sin filtro de únicos: importan joins y
+    # compartidos). En pl el grupo 1 es espejo y no se usa; en se_comn los
+    # grupos 0/1 son programas distintos (prg00/prg01).
     tracks = {}
     try:
         if not HAVE_DTPK or dtpk_data[0:4] != b'DTPK':
@@ -1174,9 +1265,9 @@ def dtpk_voice_tracks(dtpk_data):
                 break
             pb.append((e[2], (e[0x0a] << 8) | e[0x0b]))
         seq = DTPK.DTPKSequencerChunk(seq_off, dtpk_data[seq_off:])
-        if not seq.SequencerGroups:
+        if not seq.SequencerGroups or group >= len(seq.SequencerGroups):
             return tracks
-        grp = seq.SequencerGroups[0]
+        grp = seq.SequencerGroups[group]
         for track_idx, track in enumerate(grp.groupItems):
             for entry in track.entryList:
                 if DTPK.IsTrackEntry(entry.entry_type):
@@ -1225,38 +1316,79 @@ def _digest_load():
     return {}
 
 
-def _digest_tracks(bin_path):
-    # {track: {'samples':[], 'rates':[]}} del pid (claves int). {} si no hay.
+def _digest_tracks(bin_path, group=0):
+    # {track: {'samples':[], 'rates':[]}} del pid+grupo (claves int).
+    # El digest puede traer 'groups' {g: {tracks}} (se_comn) o legacy
+    # 'tracks' (grupo 0). {} si no hay.
     try:
-        base = os.path.splitext(os.path.basename(bin_path))[0]
-        pid = base.split('_')[0].lower()
+        pid = _pid_of_bin(bin_path)
         dg = _digest_load()
         ent = dg.get(pid)
         if not isinstance(ent, dict):
             return {}
-        tr = ent.get('tracks', {})
+        gr = ent.get('groups', {})
+        if isinstance(gr, dict) and str(group) in gr and isinstance(gr[str(group)], dict):
+            tr = gr[str(group)].get('tracks', {})
+        else:
+            if group != 0:
+                return {}
+            tr = ent.get('tracks', {})
         return {int(t): v for t, v in tr.items() if isinstance(v, dict)}
     except:
         return {}
 
 
-def _voice_missing(bin_path, entries, track):
-    # ¿La voz del track no está en ningún slot? Estructural (digest +
-    # mapa): el sample no lo contiene ningún slot mapeado. Sin DTPK/PCM.
+def _digest_all_groups(bin_path):
+    # {grupo: {track: info}} (legacy = solo grupo 0).
+    try:
+        pid = _pid_of_bin(bin_path)
+        dg = _digest_load()
+        ent = dg.get(pid)
+        if not isinstance(ent, dict):
+            return {}
+        out = {}
+        gr = ent.get('groups', {})
+        if isinstance(gr, dict) and gr:
+            for g, gent in gr.items():
+                try:
+                    tr = (gent or {}).get('tracks', {})
+                    out[int(g)] = {int(t): v for t, v in tr.items() if isinstance(v, dict)}
+                except:
+                    pass
+        if not out:
+            tr = ent.get('tracks', {})
+            out[0] = {int(t): v for t, v in tr.items() if isinstance(v, dict)}
+        return out
+    except:
+        return {}
+
+
+def _voice_missing(bin_path, entries, tkey):
+    # ¿La voz del take (grupo,numero) no está en ningún slot? Estructural
+    # (digest + mapa): el sample no lo contiene ningún slot mapeado.
+    # Sin DTPK/PCM.
     try:
         det = bridge_detail_for_bin(bin_path)
         if not det:
             return False
-        dg = _digest_tracks(bin_path)
-        tinfo = dg.get(track)
+        try:
+            gnum, tnum = int(tkey[0]), int(tkey[1])
+        except:
+            return False
+        dg = _digest_all_groups(bin_path)
+        tinfo = (dg.get(gnum) or {}).get(tnum)
         if not tinfo or len(tinfo.get('samples', [])) != 1:
             return False
         smp = tinfo['samples'][0]
         for d in det.values():
             if d.get('sample') == smp:
                 return False
-            if track in (d.get('tracks') or []):
-                return False
+            for t in (d.get('tracks') or []):
+                try:
+                    if (int(t[0]), int(t[1])) == (gnum, tnum):
+                        return False
+                except:
+                    pass
         return True
     except:
         return False
@@ -1264,13 +1396,14 @@ def _voice_missing(bin_path, entries, track):
 
 _BRIDGE_DUB_WARN = {}
 
-def _bridge_is_dubbed(bin_path, vtracks, samp_pcm):
+def _bridge_is_dubbed(bin_path, vtracks, samp_pcm, group=0):
     # ¿Este "puente" DTPK ya está DOBLADO (contiene los takes latinos)?
     # Un puente doblado arruina el match: se rechaza con aviso.
     # Solo cuenta si TODAS las voces probadas matchean (un pack real
     # puede tener takes sin doblar, que matchean legítimamente).
+    # group = grupo DTPK a probar (takes prgGG_* en se_comn).
     try:
-        tests = []
+        cands = []
         for tnum in sorted(vtracks):
             if tnum >= 30 or tnum in GRUNT_TRACKS:
                 continue
@@ -1282,15 +1415,18 @@ def _bridge_is_dubbed(bin_path, vtracks, samp_pcm):
                 continue
             lat = None
             for cand in _find_latino_wavs(bin_path):
-                m = re.search(r'_%02d\.wav$' % tnum, os.path.basename(cand), re.I)
-                if m:
+                k = _take_key(cand)
+                if k is not None and k[0] == group and k[1] == tnum:
                     lat = cand
                     break
             if lat is None:
                 continue
-            tests.append((tnum, smp, sorted(tinfo['rates'])[0], lat))
-            if len(tests) >= 4:
-                break
+            cands.append((tnum, smp, sorted(tinfo['rates'])[0], lat))
+        if len(cands) < 4:
+            return False
+        # Distribuidos (inicio+fin): un puente mixto no da unanimidad.
+        idxs = sorted(set([0, 1, len(cands) - 2, len(cands) - 1]))
+        tests = [cands[i] for i in idxs if 0 <= i < len(cands)]
         if len(tests) < 3:
             return False
         hits = 0
@@ -1311,25 +1447,27 @@ def _bridge_is_dubbed(bin_path, vtracks, samp_pcm):
         return False
 
 def dtpk_sample_sharing(bin_path):
-    # {track: [tracks hermanos que comparten sample]}. Primero digest
-    # (sin DTPK); si no hay, parseo del puente.
+    # {(grupo,track): [(grupo,track) hermanos que comparten sample]}.
+    # Primero digest (sin DTPK); si no hay, parseo del puente (grupo 0).
     # Sirve para explicar takes sin slot propio.
     sharing = {}
     try:
-        dg = _digest_tracks(bin_path)
-        if dg:
+        dall = _digest_all_groups(bin_path)
+        if dall:
             by_s = {}
-            for tnum, tinfo in dg.items():
-                for s in tinfo.get('samples', []):
-                    by_s.setdefault(s, []).append(tnum)
-            for tnum, tinfo in dg.items():
-                sibs = set()
-                for s in tinfo.get('samples', []):
-                    for t in by_s.get(s, []):
-                        if t != tnum:
-                            sibs.add(t)
-                if sibs:
-                    sharing[tnum] = sorted(sibs)
+            for _g, _tr in dall.items():
+                for tnum, tinfo in _tr.items():
+                    for s in tinfo.get('samples', []):
+                        by_s.setdefault(s, []).append((_g, tnum))
+            for _g, _tr in dall.items():
+                for tnum, tinfo in _tr.items():
+                    sibs = set()
+                    for s in tinfo.get('samples', []):
+                        for t in by_s.get(s, []):
+                            if t != (_g, tnum):
+                                sibs.add(t)
+                    if sibs:
+                        sharing[(_g, tnum)] = sorted(sibs)
             return sharing
     except:
         pass
@@ -1342,15 +1480,15 @@ def dtpk_sample_sharing(bin_path):
         by_s = {}
         for tnum, tinfo in vt.items():
             for s in tinfo['samples']:
-                by_s.setdefault(s, []).append(tnum)
+                by_s.setdefault(s, []).append((0, tnum))
         for tnum, tinfo in vt.items():
             sibs = set()
             for s in tinfo['samples']:
                 for t in by_s.get(s, []):
-                    if t != tnum:
+                    if t != (0, tnum):
                         sibs.add(t)
             if sibs:
-                sharing[tnum] = sorted(sibs)
+                sharing[(0, tnum)] = sorted(sibs)
     except:
         pass
     return sharing
@@ -1476,23 +1614,74 @@ def _rank_slot_vs_samples(sl, e_rate, samp_pcm, samp_rates, tol=0.30):
     return scored
 
 
-def _digest_sample_rates(bin_path, sample):
-    # Tasas SPD del sample vía digest (sin DTPK). Para rellenar cachés
-    # viejas que no guardaban srates.
+def _match_slot_best(sl, raw, hd_rate, samp_pcm, samp_rates):
+    # Mejor (score, eff, smp) para un slot: nativo (>=0.60) o retry con
+    # pitch corregido (>=0.80). (None, 0.0, None) si nada sirve.
     try:
-        dg = _digest_tracks(bin_path)
-        if not dg or sample is None:
+        scored = _rank_slot_vs_samples(sl, hd_rate, samp_pcm, samp_rates)
+        best = (0.0, None, None)
+        for v, eff, smp in scored[:3]:
+            if v > best[0]:
+                best = (v, eff, smp)
+        if best[1] is not None and best[0] >= BRIDGE_MIN_SCORE:
+            return best
+    except:
+        best = (0.0, None, None)
+    # 2ª oportunidad: el port a veces retima el pitch. Se lleva el slot
+    # a la tasa del SPD (solo ratios suaves 0.7-1.4) y se exige score alto.
+    try:
+        retry = []
+        for eff in (hd_rate, (hd_rate // 2) if hd_rate else 0):
+            if not eff:
+                continue
+            for smp in samp_pcm:
+                for r in samp_rates.get(smp, set()):
+                    if not r:
+                        continue
+                    ratio = r / eff
+                    if 0.7 <= ratio <= 1.4 and abs(ratio - 1.0) > 0.04:
+                        retry.append((eff, smp, r))
+        best2 = (0.0, None, None)
+        _slr_cache = {}
+        for eff, smp, r in retry:
+            try:
+                _rk = (eff, r)
+                if _rk not in _slr_cache:
+                    _slr_cache[_rk] = _pcm_to_list(resample_pcm16(vag_to_pcm16(raw), eff, r))
+                slr = _slr_cache[_rk]
+            except:
+                continue
+            sc, lag = _corr_screen(slr, samp_pcm[smp])
+            if sc >= 0.30:
+                v = _corr_around(slr, samp_pcm[smp], lag)
+                if v > best2[0]:
+                    best2 = (v, r, smp)
+        if best2[1] is not None and best2[0] >= 0.80:
+            return best2
+    except:
+        pass
+    return best
+
+
+def _digest_sample_rates(bin_path, sample):
+    # Tasas SPD del sample vía digest (sin DTPK). Une grupos.
+    # Para rellenar cachés viejas que no guardaban srates.
+    try:
+        dall = _digest_all_groups(bin_path)
+        if not dall or sample is None:
             return []
         out = set()
-        for tnum, tinfo in dg.items():
-            if sample in (tinfo.get('samples') or []):
-                out.update(tinfo.get('rates') or [])
+        for _g, _tr in dall.items():
+            for tnum, tinfo in _tr.items():
+                if sample in (tinfo.get('samples') or []):
+                    out.update(tinfo.get('rates') or [])
         return sorted(out)
     except:
         return []
 
 
 def _bridge_entry_to_res(ent, res, bin_path=None):
+    # Entradas viejas (tracks int, sin tgroup/srates) se migran.
     try:
         for k, v in ent['slots'].items():
             sr = list(v[6]) if len(v) > 6 and isinstance(v[6], list) else []
@@ -1501,7 +1690,23 @@ def _bridge_entry_to_res(ent, res, bin_path=None):
                     sr = _digest_sample_rates(bin_path, v[0])
                 except:
                     sr = []
-            res[int(k)] = {'sample': v[0], 'track': v[1], 'tracks': v[2],
+            tr = []
+            try:
+                for t in (v[2] or []):
+                    if isinstance(t, (list, tuple)) and len(t) == 2:
+                        tr.append([int(t[0]), int(t[1])])
+                    else:
+                        tr.append([0, int(t)])
+            except:
+                tr = []
+            tg = 0
+            try:
+                if len(v) > 7:
+                    tg = int(v[7])
+            except:
+                tg = 0
+            res[int(k)] = {'sample': v[0], 'track': v[1], 'tgroup': tg,
+                           'tracks': tr,
                            'score': v[3], 'eff': v[4], 'method': v[5],
                            'srates': sr}
         return True
@@ -1521,9 +1726,8 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
             pass
     res = {}
     try:
-        base = os.path.splitext(os.path.basename(bin_path))[0]
-        pid = base.split('_')[0].lower()
-        if not pid.startswith('pl'):
+        pid = _pid_of_bin(bin_path)
+        if not _is_dub_pid(pid):
             return res
         try:
             sig_bin = f'{pid}|{_sig_file(bin_path)}'
@@ -1565,32 +1769,51 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
         if not bridge:
             return res
         dtpk_data = open(bridge, 'rb').read()
-        vtracks = dtpk_voice_tracks(dtpk_data)
-        if not vtracks:
-            return res
-        # samples del DTPK decodificados una vez
+        # Grupos de voz: pl/staf/syuk usan el 0; se_comn usa 0 y 1
+        # (prg00/prg01; el 2 duplica al 0 y se omite).
+        vtrack_maps = {}
+        try:
+            _groups = [0, 1] if pid == 'se_comn' else [0]
+            for _g in _groups:
+                _vt = dtpk_voice_tracks(dtpk_data, _g)
+                if _vt:
+                    vtrack_maps[_g] = _vt
+            if pid == 'se_comn' and 0 in vtrack_maps and 1 in vtrack_maps:
+                _a = {t: (tuple(v['samples']), tuple(sorted(v['rates']))) for t, v in vtrack_maps[0].items()}
+                _b = {t: (tuple(v['samples']), tuple(sorted(v['rates']))) for t, v in vtrack_maps[1].items()}
+                if _a == _b:
+                    del vtrack_maps[1]
+        except:
+            pass
+        if not vtrack_maps:
+            vtrack_maps = {0: dtpk_voice_tracks(dtpk_data)}
+            if not vtrack_maps[0]:
+                return res
+        vtracks = vtrack_maps.get(0, {})
+        # samples del DTPK decodificados una vez (unión de grupos)
         p = parse_dtpk(dtpk_data)
         by_idx = {e['index']: e for e in p['entries']}
         samp_pcm = {}
         samp_rates = {}
-        for tnum, tinfo in vtracks.items():
-            for s in tinfo['samples']:
-                samp_rates.setdefault(s, set()).update(tinfo['rates'])
-                if s in samp_pcm or s not in by_idx:
-                    continue
-                e = by_idx[s]
-                rel = 0 if e['bytes'] == len(dtpk_data) - p['soff'] else e['offset'] - p['soff']
-                raw = dtpk_data[p['soff'] + rel: p['soff'] + rel + e['bytes']]
-                try:
-                    pcm = decode_sample(e['format'], e['stereo'], raw)
-                except:
-                    continue
-                if e['stereo']:
+        for _g, _vt in vtrack_maps.items():
+            for tnum, tinfo in _vt.items():
+                for s in tinfo['samples']:
+                    samp_rates.setdefault(s, set()).update(tinfo['rates'])
+                    if s in samp_pcm or s not in by_idx:
+                        continue
+                    e = by_idx[s]
+                    rel = 0 if e['bytes'] == len(dtpk_data) - p['soff'] else e['offset'] - p['soff']
+                    raw = dtpk_data[p['soff'] + rel: p['soff'] + rel + e['bytes']]
                     try:
-                        pcm = make_mono(pcm)
+                        pcm = decode_sample(e['format'], e['stereo'], raw)
                     except:
-                        pass
-                samp_pcm[s] = _pcm_to_list(pcm)
+                        continue
+                    if e['stereo']:
+                        try:
+                            pcm = make_mono(pcm)
+                        except:
+                            pass
+                    samp_pcm[s] = _pcm_to_list(pcm)
         # Guardia: si el "puente" ya está doblado, rechazarlo (arruinaría
         # el match). Solo fijos a oído en ese caso.
         try:
@@ -1601,11 +1824,14 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                 return res
         except:
             pass
-        # sample -> tracks (para colisiones y joins)
+        # sample -> [(grupo, track)] (para colisiones y joins). En pl los
+        # gruñidos 40-43 se excluyen (sin take); en se todo cuenta.
+        _no_grunt = GRUNT_TRACKS if pid.startswith('pl') else set()
         sample_tracks = {}
-        for tnum, tinfo in vtracks.items():
-            for s in tinfo['samples']:
-                sample_tracks.setdefault(s, []).append(tnum)
+        for _g, _vt in vtrack_maps.items():
+            for tnum, tinfo in _vt.items():
+                for s in tinfo['samples']:
+                    sample_tracks.setdefault(s, []).append((_g, tnum))
         slot_list = [e['index'] for e in entries if e['size'] > 200]
         by_e = {e['index']: e for e in entries}
         total = len(slot_list)
@@ -1618,58 +1844,94 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                 sl = _pcm_to_list(vag_to_pcm16(raw))
             except:
                 continue
-            scored = _rank_slot_vs_samples(sl, e['rate'], samp_pcm, samp_rates)
-            best = (0.0, None, None, 0)
-            for v, eff, smp in scored[:3]:
-                if v > best[0]:
-                    best = (v, eff, smp, 0)
+            scored = _match_slot_best(sl, raw, e['rate'], samp_pcm, samp_rates)
+            best = (scored[0], scored[1], scored[2], 0)
             if best[1] is not None and best[0] >= BRIDGE_MIN_SCORE:
                 smp = best[2]
-                trks = [t for t in sample_tracks.get(smp, []) if t not in GRUNT_TRACKS]
-                if not trks:
-                    continue
-                res[s] = {'sample': smp, 'track': trks[0], 'tracks': trks,
-                          'score': round(best[0], 3), 'eff': best[1], 'method': 'dtpk',
-                          'srates': sorted(samp_rates.get(smp, set()))}
-                continue
-            # 2ª oportunidad: el port a veces retima el pitch (ej slot a
-            # 8000 de un SPD 11025). Se lleva el slot a la tasa del SPD
-            # (solo ratios suaves 0.7-1.4) y se exige score alto.
-            try:
-                retry = []
-                for eff in (e['rate'], e['rate'] // 2):
-                    if not eff:
-                        continue
-                    for smp, spcm in samp_pcm.items():
-                        for r in samp_rates.get(smp, set()):
-                            if not r:
-                                continue
-                            ratio = r / eff
-                            if 0.7 <= ratio <= 1.4 and abs(ratio - 1.0) > 0.04:
-                                retry.append((eff, smp, r))
-                best2 = (0.0, None, None, None)
-                for eff, smp, r in retry:
-                    try:
-                        slr = _pcm_to_list(resample_pcm16(vag_to_pcm16(raw), eff, r))
-                    except:
-                        continue
-                    sc, lag = _corr_screen(slr, samp_pcm[smp])
-                    if sc >= 0.45:
-                        v = _corr_around(slr, samp_pcm[smp], lag)
-                        if v > best2[0]:
-                            best2 = (v, eff, smp, r)
-                if best2[1] is not None and best2[0] >= 0.80:
-                    smp = best2[2]
-                    trks = [t for t in sample_tracks.get(smp, []) if t not in GRUNT_TRACKS]
-                    if trks:
-                        res[s] = {'sample': smp, 'track': trks[0], 'tracks': trks,
-                                  'score': round(best2[0], 3), 'eff': best2[3],
-                                  'method': 'dtpk',
-                                  'srates': sorted(samp_rates.get(smp, set()))}
-            except:
-                pass
+                trks = [(g, t) for (g, t) in sample_tracks.get(smp, []) if t not in _no_grunt]
+                if trks:
+                    _pg, _pt = trks[0]
+                    res[s] = {'sample': smp, 'track': _pt, 'tgroup': _pg,
+                              'tracks': [[g, t] for (g, t) in trks],
+                              'score': round(best[0], 3), 'eff': best[1], 'method': 'dtpk',
+                              'srates': sorted(samp_rates.get(smp, set()))}
             if log and (pos % 5 == 0 or pos + 1 == total):
                 log(f'  puente DTPK: slot {s:02d} ({pos + 1}/{total})')
+        # Puentes EXTRA (ej otro mod con takes distintos): solo para slots
+        # que el primario no cubrió. La correlación decide; cada extra usa
+        # su propia topología track->sample. Se rechaza el extra doblado.
+        try:
+            _unmatched = [s for s in slot_list if s not in res]
+            if _unmatched:
+                for _xpath in find_dtpk_bridges_extra(bin_path, bridge):
+                    if not [s for s in slot_list if s not in res]:
+                        break
+                    try:
+                        _xdata = open(_xpath, 'rb').read()
+                        if _xdata[0:4] != b'DTPK':
+                            continue
+                        _xvt = {}
+                        for _g in ([0, 1] if pid == 'se_comn' else [0]):
+                            _t = dtpk_voice_tracks(_xdata, _g)
+                            if _t:
+                                _xvt[_g] = _t
+                        if not _xvt:
+                            continue
+                        _xp = parse_dtpk(_xdata)
+                        _xby = {e['index']: e for e in _xp['entries']}
+                        _xpcm, _xrates, _xtracks = {}, {}, {}
+                        for _g, _vt in _xvt.items():
+                            for _tn, _ti in _vt.items():
+                                for _ss in _ti['samples']:
+                                    _xrates.setdefault(('x', _ss), set()).update(_ti['rates'])
+                                    _xtracks.setdefault(('x', _ss), []).append((_g, _tn))
+                                    if ('x', _ss) in _xpcm or _ss not in _xby:
+                                        continue
+                                    _e = _xby[_ss]
+                                    _rel = 0 if _e['bytes'] == len(_xdata) - _xp['soff'] else _e['offset'] - _xp['soff']
+                                    _rraw = _xdata[_xp['soff'] + _rel: _xp['soff'] + _rel + _e['bytes']]
+                                    try:
+                                        _pc = decode_sample(_e['format'], _e['stereo'], _rraw)
+                                    except:
+                                        continue
+                                    if _e['stereo']:
+                                        try:
+                                            _pc = make_mono(_pc)
+                                        except:
+                                            pass
+                                    _xpcm[('x', _ss)] = _pcm_to_list(_pc)
+                        if not _xpcm:
+                            continue
+                        if _bridge_is_dubbed(bin_path, _xvt.get(0, {}), {k[1]: v for k, v in _xpcm.items()}, 0):
+                            log(f'  puente extra {os.path.basename(_xpath)}: doblado, se omite.')
+                            continue
+                        for _s in [s for s in slot_list if s not in res]:
+                            _e = by_e[_s]
+                            _rraw = bd[_e['offset']:_e['offset'] + _e['size']]
+                            if len(_rraw) >= 16 and _rraw[-16:] == bytes.fromhex('00 07 77 77 77 77 77 77 77 77 77 77 77 77 77 77'):
+                                _rraw = _rraw[:-16]
+                            try:
+                                _sl = _pcm_to_list(vag_to_pcm16(_rraw))
+                            except:
+                                continue
+                            _sc, _ef, _sm = _match_slot_best(_sl, _rraw, _e['rate'], _xpcm, _xrates)
+                            if _ef is not None and _sc >= BRIDGE_MIN_SCORE:
+                                _trks = [(g, t) for (g, t) in _xtracks.get(_sm, []) if t not in _no_grunt]
+                                if _trks:
+                                    _pg, _pt = _trks[0]
+                                    res[_s] = {'sample': _sm[1], 'track': _pt, 'tgroup': _pg,
+                                               'tracks': [[g, t] for (g, t) in _trks],
+                                               'score': round(_sc, 3), 'eff': _ef, 'method': 'dtpk',
+                                               'srates': sorted(_xrates.get(_sm, set())),
+                                               'xbridge': os.path.basename(_xpath)}
+                                    log(f'  puente extra: slot {_s:02d} <- take {_pg}:{_pt:02d} ({round(_sc, 2)})')
+                    except Exception as _xe:
+                        try:
+                            log(f'  puente extra falló: {_xe}')
+                        except:
+                            pass
+        except:
+            pass
         # Fallback: slots sin match original -> ¿ya doblados? (mismo origen
         # digital que el take latino: MS ADPCM -> VAG). Se lleva el take a
         # la tasa del slot y se compara por contenido a resolución nativa.
@@ -1705,53 +1967,59 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                         if v > best[0]:
                             best = (v, w, eff)
             if best[1] is not None and best[0] >= 0.70:
-                m = re.search(r'_(\d+)\.wav$', os.path.basename(best[1]), re.I)
-                if m:
-                    tnum = int(m.group(1))
-                    sib = [tnum]
+                tkey = _take_key(best[1])
+                if tkey is not None:
+                    tnum = tkey[1]
+                    sib = [list(tkey)]
                     take_rates = set()
                     try:
-                        ti = vtracks.get(tnum)
+                        ti = vtrack_maps.get(tkey[0], {}).get(tnum)
                         if ti:
                             for s2 in ti['samples']:
                                 take_rates.update(samp_rates.get(s2, set()))
-                                for t2 in sample_tracks.get(s2, []):
-                                    if t2 not in sib:
-                                        sib.append(t2)
+                                for (gg, tt) in sample_tracks.get(s2, []):
+                                    if [gg, tt] not in sib:
+                                        sib.append([gg, tt])
                     except:
                         pass
-                    res[s] = {'sample': None, 'track': tnum, 'tracks': sorted(sib),
+                    res[s] = {'sample': None, 'track': tnum, 'tgroup': tkey[0],
+                              'tracks': sorted(sib),
                               'score': round(best[0], 3), 'eff': best[2], 'method': 'dub',
                               'srates': sorted(take_rates)}
         # Completado 1:1: si queda UN slot libre y UN take sin cubrir (teniendo
         # en cuenta también los fijos a oído), se emparejan por contenido
         # (sin filtro de tasas) con compuertas estrictas; si no, queda para
-        # revisión a oído. Sin duraciones.
+        # revisión a oído. Sin duraciones. Claves (grupo, take).
         try:
-            by_num = {}
+            by_key = {}
             for w in _find_latino_wavs(bin_path):
-                m = re.search(r'_(\d+)\.wav$', os.path.basename(w), re.I)
-                if m:
-                    by_num[int(m.group(1))] = w
+                k = _take_key(w)
+                if k is not None:
+                    by_key[k] = w
             covered = set()
             for b in res.values():
                 for t in b.get('tracks', []) or []:
-                    covered.add(t)
+                    try:
+                        covered.add((int(t[0]), int(t[1])) if isinstance(t, (list, tuple)) else (0, int(t)))
+                    except:
+                        pass
             fix_cov = _load_map_fix()
             fix_slots = set()
             for (fpid, fs) in fix_cov:
                 if fpid != pid:
                     continue
                 fix_slots.add(fs)
-                m2 = re.search(r'_(\d+)\.wav$', fix_cov[(fpid, fs)], re.I)
-                if m2:
-                    covered.add(int(m2.group(1)))
+                fk = fix_cov[(fpid, fs)]
+                try:
+                    covered.add((int(fk[0]), int(fk[1])))
+                except:
+                    pass
             free_slots = [s for s in slot_list if s not in res and s not in fix_slots]
-            missing = sorted(t for t in by_num if t not in covered)
+            missing = sorted(t for t in by_key if t not in covered)
             if len(free_slots) == 1 and len(missing) == 1:
                 s = free_slots[0]
-                tnum = missing[0]
-                tinfo = vtracks.get(tnum)
+                gnum, tnum = missing[0]
+                tinfo = vtrack_maps.get(gnum, {}).get(tnum)
                 if tinfo and len(tinfo['samples']) == 1:
                     smp = tinfo['samples'][0]
                     e = by_e[s]
@@ -1772,15 +2040,16 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                         else:
                             meth = None
                         if meth:
-                            res[s] = {'sample': smp, 'track': tnum, 'tracks': [tnum],
+                            res[s] = {'sample': smp, 'track': tnum, 'tgroup': gnum,
+                                      'tracks': [[gnum, tnum]],
                                       'score': round(sc, 3), 'eff': top[0][1], 'method': meth,
                                       'srates': sorted(samp_rates.get(smp, set()))}
-                            log(f'  puente DTPK: slot {s:02d} <- take {tnum:02d} [{meth}, completado 1:1]')
+                            log(f'  puente DTPK: slot {s:02d} <- take {gnum}:{tnum:02d} [{meth}, completado 1:1]')
         except:
             pass
         cache[sig] = {'v': BRIDGE_CACHE_V,
                         'slots': {str(k): [v['sample'], v['track'], v['tracks'], v['score'], v['eff'], v['method'],
-                                           v.get('srates', [])]
+                                           v.get('srates', []), v.get('tgroup', 0)]
                                 for k, v in res.items()}}
         _bridge_cache_save(cache)
     except Exception as ex:
@@ -1817,7 +2086,7 @@ def latino_map_lines(bin_path, entries):
         return lines
     try:
         _fix = _load_map_fix()
-        _pid = os.path.splitext(os.path.basename(bin_path))[0].split('_')[0].lower()
+        _pid = _pid_of_bin(bin_path)
     except:
         _fix, _pid = {}, ''
     det = bridge_detail_for_bin(bin_path)
@@ -1832,12 +2101,13 @@ def latino_map_lines(bin_path, entries):
         lines.append('')
     except:
         pass
+    def _vkey_of(w):
+        k = _take_key(w)
+        return k if k is not None else (0, 9999)
     def _vnum(w):
-        import re as _re
-        m = _re.search(r'_(\d+)\.wav$', os.path.basename(w))
-        return int(m.group(1)) if m else 9999
-    # Orden POR VOZ (nº wav = nº track DTPK = orden del juego), no por slot.
-    for s in sorted(mp, key=lambda x: (_vnum(mp[x]), x)):
+        return _vkey_of(w)[1]
+    # Orden POR VOZ ((grupo, take) = orden del juego), no por slot.
+    for s in sorted(mp, key=lambda x: (_vkey_of(mp[x]), x)):
         e = next((x for x in entries if x['index'] == s), None)
         _sp, dur = _wav_span_dur(mp[s])
         fit = _slot_fit(e, dur or 0)
@@ -1849,10 +2119,18 @@ def latino_map_lines(bin_path, entries):
         if (_pid, s) in _fix:
             sw = ' [FIJO: verificado a oido]' if _MAP_FIX_SRC.get((_pid, s)) == 'man' else ' [FIJO]'
         elif meth == 'dtpk':
-            extra = [t for t in d.get('tracks', []) if t != d.get('track')]
-            sw = f" [puente DTPK: track {d.get('track'):02d}, sample {d.get('sample')}, corr {d.get('score')}]"
+            _pt = (d.get('tgroup', 0), d.get('track'))
+            extra = []
+            for t in d.get('tracks', []) or []:
+                try:
+                    _kt = (int(t[0]), int(t[1])) if isinstance(t, (list, tuple)) else (0, int(t))
+                except:
+                    continue
+                if _kt != _pt:
+                    extra.append(_kt)
+            sw = f" [puente DTPK: take {_pt[0]}:{_pt[1]:02d}, sample {d.get('sample')}, corr {d.get('score')}]"
             if extra:
-                sw += f" [COMPARTE slot con takes {', '.join('%02d' % t for t in sorted(extra))}: elegir a oido]"
+                sw += f" [COMPARTE slot con takes {', '.join('%d:%02d' % t for t in sorted(extra))}: elegir a oido]"
         elif meth == 'dub':
             sw = f" [DOBLADO: el slot ya trae este take (corr {d.get('score')})]"
         elif meth == 'dudoso':
@@ -1882,22 +2160,45 @@ def latino_map_lines(bin_path, entries):
             _share = dtpk_sample_sharing(bin_path)
             _slot_of_take = {}
             for _s, _w in mp.items():
-                _m = re.search(r'_(\d+)\.wav$', os.path.basename(_w), re.I)
-                if _m:
-                    _slot_of_take[int(_m.group(1))] = _s
+                _k = _take_key(_w)
+                if _k is not None:
+                    _slot_of_take[_k] = _s
         except:
             _share, _slot_of_take = {}, {}
         for w in extra_wavs:
-            _m = re.search(r'_(\d+)\.wav$', os.path.basename(w), re.I)
-            _t = int(_m.group(1)) if _m else None
+            _t = _take_key(w)
             _sibs = _share.get(_t, []) if _t is not None else []
-            _home = [f"take {_b:02d}->slot {_slot_of_take[_b]:02d}" for _b in _sibs if _b in _slot_of_take]
+            _home = [f"take {_b[0]}:{_b[1]:02d}->slot {_slot_of_take[_b]:02d}" for _b in _sibs if _b in _slot_of_take]
             if _home:
                 lines.append(f"  + {os.path.basename(w)} [COMPARTE sample/slot con {', '.join(_home)}: mismo slot para ambos]")
-            elif _t is not None and _t not in _slot_of_take and not free_slots and _voice_missing(bin_path, entries, _t):
+                continue
+            # Candidatos por TASA (pitch compatible con el take), sin usar duración.
+            _cands = []
+            try:
+                if _t is not None:
+                    _dall = _digest_all_groups(bin_path)
+                    _ti = (_dall.get(_t[0]) or {}).get(_t[1])
+                    _rr = set()
+                    if _ti:
+                        for _ss in _ti.get('samples', []):
+                            for _gg, _tr in _dall.items():
+                                for _tt, _tii in _tr.items():
+                                    if _ss in (_tii.get('samples') or []):
+                                        _rr.update(_tii.get('rates') or [])
+                    for _fs in free_slots:
+                        _fe = next((x for x in entries if x['index'] == _fs), None)
+                        if _fe is None:
+                            continue
+                        _hd = _fe['rate']
+                        if any(_hd and _r and (abs(_hd - _r) <= max(2, int(_r * 0.15)) or abs(_hd // 2 - _r) <= max(2, int(_r * 0.15))) for _r in _rr):
+                            _cands.append(_fs)
+            except:
+                _cands = []
+            _cs = f" [candidatos por tasa: slots {', '.join('%02d' % _c for _c in sorted(_cands))}]" if _cands else ""
+            if _t is not None and _t not in _slot_of_take and not free_slots and _voice_missing(bin_path, entries, _t):
                 lines.append(f"  + {os.path.basename(w)} [SIN SLOT: la voz no está en este .bin PS2 (revisar original/DTPK)]")
             else:
-                lines.append(f"  + {os.path.basename(w)} [revisar a oido]")
+                lines.append(f"  + {os.path.basename(w)} [revisar a oido]{_cs}")
     if free_slots:
         lines.append('')
         lines.append(f"Slots SIN wav ({len(free_slots)}, se quedan originales):")
@@ -1905,13 +2206,26 @@ def latino_map_lines(bin_path, entries):
             lines.append(f"  - slot {s:02d}")
     return lines
 
-# Pares verificados a oído {(pid, slot): wav_basename}. Mandan sobre todo.
+# Pares verificados a oído {(pid, slot): (grupo, take)}. Mandan sobre todo.
 # Ej pl04: slot11<-46, slot12<-45, slot13<-47 (mismo contenido que el puente).
 PS2_MAP_FIX = {
-    ('pl04', 11): 'mvc2_pl04_46.wav',
-    ('pl04', 12): 'mvc2_pl04_45.wav',
-    ('pl04', 13): 'mvc2_pl04_47.wav',
+    ('pl04', 11): (0, 46),
+    ('pl04', 12): (0, 45),
+    ('pl04', 13): (0, 47),
 }
+
+def _fix_value_to_key(pid, val):
+    # Valor de fix -> (grupo, take): '46' (pl legacy), 'g:n', o basename.
+    try:
+        v = (val or '').strip()
+        m = re.match(r'^(\d+)\s*:\s*(\d+)$', v)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+        if re.match(r'^\d+$', v):
+            return (0, int(v))
+        return _take_key(v)
+    except:
+        return None
 
 _MAP_FIX_SRC = {}
 def _load_map_div():
@@ -1952,7 +2266,7 @@ def _slot_divided(bin_path, slot):
     try:
         if _MAP_DIV is None:
             _MAP_DIV = _load_map_div()
-        pid = os.path.splitext(os.path.basename(bin_path))[0].split('_')[0].lower()
+        pid = _pid_of_bin(bin_path)
         return _MAP_DIV.get(pid, {}).get(slot)
     except:
         return None
@@ -2019,9 +2333,10 @@ def _ps2_true_rate(bin_path, slot, hd_rate, sample_rates=None):
         return hd_rate
 
 def _load_map_fix():
-    # {(pid, slot): wav_basename}. Defaults + manual verificado.
-    # Gana el manual (ps2_map_fix.txt). Formato: pl04:11=46.
-    # Sin auto-matching: cada línea es un par probado (oído o contenido).
+    # {(pid, slot): (grupo, take)}. Defaults + manual verificado.
+    # Gana el manual (ps2_map_fix.txt). Formatos de valor: 46 (pl legacy),
+    # g:n (ej 0:10), o basename (ej mvc2_prg00_10.wav).
+    # Cada línea es un par probado (oído o contenido).
     global _MAP_FIX_SRC
     fix = dict(PS2_MAP_FIX)
     _MAP_FIX_SRC = {k: 'def' for k in fix}
@@ -2042,11 +2357,18 @@ def _load_map_fix():
                     ln = ln.split('#', 1)[0].strip()
                     if not ln or '=' not in ln or ':' not in ln:
                         continue
-                    left, num = ln.split('=', 1)
+                    left, val = ln.split('=', 1)
                     pid, slot = left.split(':', 1)
-                    pid, slot, num = pid.strip().lower(), int(slot.strip()), num.strip()
-                    if pid.startswith('pl'):
-                        fix[(pid, slot)] = f'mvc2_{pid}_{int(num):02d}.wav'
+                    pid = pid.strip().lower()
+                    try:
+                        slot = int(slot.strip())
+                    except:
+                        continue
+                    if not _is_dub_pid(pid):
+                        continue
+                    key = _fix_value_to_key(pid, val)
+                    if key is not None:
+                        fix[(pid, slot)] = key
                         _MAP_FIX_SRC[(pid, slot)] = src
                 break
     except:
@@ -2103,25 +2425,25 @@ def _is_half_rate(entry, dur_ms):
 
 def latino_map_for_ps2(bin_path, entries):
     """Mapea slot_idx -> wav latino.
+    Clave de take: (grupo, numero) — n. de wav = n. de track DTPK del
+    grupo (como en PS3; se_comn usa prg00/prg01).
     1) pares verificados a oido (ps2_map_fix.txt + PS2_MAP_FIX),
-    2) puente DTPK por CONTENIDO (mismo idioma original): slot -> sample
-       -> track -> wav (el n. de wav es el n. de track, como en PS3).
+    2) puente DTPK por CONTENIDO (mismo idioma original).
     La DURACION no ordena ni decide nada: solo se muestra si el take cabe.
     Retorna {} si no halla la carpeta latina."""
     try:
-        base = os.path.splitext(os.path.basename(bin_path))[0]
-        pid = base.split('_')[0].lower()  # pl1b
-        if not pid.startswith('pl'):
+        pid = _pid_of_bin(bin_path)
+        if not _is_dub_pid(pid):
             return {}
         wavs = _find_latino_wavs(bin_path)
         if not wavs:
             return {}
         by_name = {os.path.basename(w): w for w in wavs}
-        by_num = {}
+        by_key = {}
         for w in wavs:
-            m = re.search(r'_(\d+)\.wav$', os.path.basename(w), re.I)
-            if m:
-                by_num[int(m.group(1))] = w
+            k = _take_key(w)
+            if k is not None:
+                by_key[k] = w
         merged = {}
         detail = {}
         # 2) puente DTPK por contenido (se calcula primero para tener
@@ -2144,24 +2466,25 @@ def latino_map_for_ps2(bin_path, entries):
         fix = _load_map_fix()
         for s in [e['index'] for e in entries if e['size'] > 200]:
             key = (pid, s)
-            if key in fix and fix[key] in by_name:
-                merged[s] = by_name[fix[key]]
-                m = re.search(r'_(\d+)\.wav$', fix[key], re.I)
-                tnum = int(m.group(1)) if m else None
+            if key in fix and fix[key] in by_key:
+                tkey = fix[key]
+                merged[s] = by_key[tkey]
                 b = bridge.get(s, {})
-                detail[s] = {'track': tnum, 'sample': b.get('sample'),
+                detail[s] = {'track': tkey[1], 'tgroup': tkey[0],
+                             'sample': b.get('sample'),
                              'score': 1.0, 'method': 'fijo',
-                             'tracks': b.get('tracks', [tnum] if tnum is not None else [])}
+                             'tracks': b.get('tracks', [list(tkey)])}
         # resto del puente
         for s, b in bridge.items():
             if s in merged:
                 continue
-            tnum = b.get('track')
-            if tnum is not None and tnum in by_num:
-                merged[s] = by_num[tnum]
-                detail[s] = {'track': tnum, 'sample': b.get('sample'),
+            tkey = (b.get('tgroup', 0), b.get('track'))
+            if tkey[1] is not None and tkey in by_key:
+                merged[s] = by_key[tkey]
+                detail[s] = {'track': tkey[1], 'tgroup': tkey[0],
+                             'sample': b.get('sample'),
                              'score': b.get('score'), 'method': b.get('method'),
-                             'tracks': b.get('tracks', [tnum])}
+                             'tracks': b.get('tracks', [list(tkey)])}
         _LAST_BRIDGE['bin'] = os.path.abspath(bin_path)
         _LAST_BRIDGE['detail'] = detail
         return merged
@@ -2211,7 +2534,8 @@ def extract_ps2(path, outdir, log):
         voz = _voz_of_latino(vmap[idx]) if idx in vmap else None
         if voz is not None:
             latbase = os.path.splitext(os.path.basename(vmap[idx]))[0]
-            fname = f"V{voz:02d}_{latbase}_slot{idx:02d}.VAG"
+            _vt = _vtag_for_wav(vmap[idx], _pid_of_bin(path)) or ("V%02d" % voz)
+            fname = f"{_vt}_{latbase}_slot{idx:02d}.VAG"
         else:
             fname = f"{base_name}_{idx:02d}_Rate_{rate:04d}.VAG"
         open(os.path.join(outdir, fname), 'wb').write(header + raw)
@@ -2577,9 +2901,24 @@ def extract_dtpk(path, outdir, log):
 
 def _voz_of_latino(latpath):
     # Número de voz desde el wav mapeado (ej _11) o None.
+    # Compat: para se_comn con prg devuelve el número (el grupo va aparte).
     try:
         mv = re.search(r'(\d+)\.wav$', os.path.basename(latpath), re.I)
         return int(mv.group(1)) if mv else None
+    except:
+        return None
+
+def _vtag_for_wav(wavpath, pid=None):
+    # Prefijo V para nombres extraídos: V11 (pl/staf/syuk), V00-11 (se_comn).
+    # Orden alfabético = orden de voz.
+    try:
+        k = _take_key(wavpath)
+        if k is None:
+            return None
+        g, n = k
+        if pid == 'se_comn':
+            return 'V%02d-%02d' % (g, n)
+        return 'V%02d' % n
     except:
         return None
 
@@ -2608,7 +2947,8 @@ def extract_dtpk_wav(path, outdir, log, half_rates=False):
             voz = _voz_of_latino(vmap[e['index']]) if e['index'] in vmap else None
             if voz is not None:
                 latbase = os.path.splitext(os.path.basename(vmap[e['index']]))[0]
-                fname = f"V{voz:02d}_{latbase}_slot{e['index']:02d}.wav"
+                _vt = _vtag_for_wav(vmap[e['index']], _pid_of_bin(path)) or ("V%02d" % voz)
+                fname = f"{_vt}_{latbase}_slot{e['index']:02d}.wav"
             else:
                 fname = f"{base_name}_VAG_{e['index']:02d}_Rate_{rate:04d}.wav"
             write_wav(os.path.join(outdir, fname), pcm, rate, False)
@@ -4095,13 +4435,12 @@ class App:
                 messagebox.showerror('MVC2 Audio Tool', str(e))
 
     def _ps2_voz(self, idx):
-        # Número de voz latino del slot (None si no hay mapeo).
+        # Clave de voz latina del slot ((grupo, numero)) o None si no hay mapeo.
         try:
             lat = (self.session.get('latino_map') or {}).get(idx)
             if not lat:
                 return None
-            mv = re.search(r'(\d+)\.wav$', os.path.basename(lat), re.I)
-            return int(mv.group(1)) if mv else None
+            return _take_key(lat)
         except:
             return None
 
@@ -4109,7 +4448,9 @@ class App:
         # Etiqueta corta con slot y voz para logs: "07" o "07/v11".
         try:
             v = self._ps2_voz(idx)
-            return f"{idx:02d}/v{v:02d}" if v is not None else f"{idx:02d}"
+            if v is None:
+                return f"{idx:02d}"
+            return f"{idx:02d}/v{_orden_txt_for_key(v, _pid_of_bin(self.session.get('path', '')))}"
         except:
             return f"{idx:02d}"
 
@@ -4120,10 +4461,11 @@ class App:
             if p is None:
                 p = dict(entries=self.session['entries'])
             lmap = (self.session.get('latino_map') or {})
+            _pid = _pid_of_bin(self.session.get('path', ''))
             if self.order_voz.get():
                 def _vkey(i):
-                    v = _voz_of_latino(lmap.get(i)) if i in lmap else None
-                    return (1, i) if v is None else (0, v, i)
+                    k = _take_key(lmap.get(i)) if i in lmap else None
+                    return (1, i) if k is None else (0, k[0], k[1], i)
                 order = sorted(range(len(p['entries'])), key=_vkey)
             else:
                 order = list(range(len(p['entries'])))
@@ -4188,7 +4530,8 @@ class App:
         base = os.path.splitext(self.session['source'])[0]
         repl = self.session['repl'][idx]
         voz = self._ps2_voz(idx)
-        orden_txt = f"{voz:02d}" if voz is not None else f"{idx:02d}"
+        _pid = _pid_of_bin(self.session.get('path', ''))
+        orden_txt = _orden_txt_for_key(voz, _pid) if voz is not None else f"{idx:02d}"
         if repl is not None:
             fname = self.session.get('repl_src', {}).get(idx) or f"VAG_{idx:02d} (reemplazado)"
         elif voz is not None:
@@ -4228,17 +4571,23 @@ class App:
             self.session['bridge'] = bridge_detail_for_bin(path)
             bdet = self.session['bridge']
             if lmap:
-                self.log(f"Latino detectado: {len(lmap)} wavs mapeados (slot -> wav, n. wav = n. voz)")
-                for s in sorted(lmap, key=lambda x: (os.path.basename(lmap[x]), x)):
+                _vpid = _pid_of_bin(path)
+                self.log(f"Latino detectado: {len(lmap)} wavs mapeados (slot -> wav, voz = take)")
+                for s in sorted(lmap, key=lambda x: (_take_key(lmap[x]) or (0, 9999), x)):
                     d = bdet.get(s, {})
                     tag = {'fijo': 'fijo', 'dtpk': 'puente %.2f' % (d.get('score') or 0),
-                           'dub': 'doblado'}.get(d.get('method'), '?')
-                    self.log(f"  voz {os.path.basename(lmap[s])[-7:-4]} <- slot {s:02d} [{tag}]")
+                           'dub': 'doblado', 'dudoso': 'dudoso'}.get(d.get('method'), '?')
+                    _vk = _take_key(lmap[s])
+                    _vt = _orden_txt_for_key(_vk, _vpid) if _vk else os.path.basename(lmap[s])[-7:-4]
+                    self.log(f"  voz {_vt} <- slot {s:02d} [{tag}]")
             # Filas en ORDEN POR VOZ ascendente (como la carpeta de latinos y
             # el PS3: 00, 03, 04...). Sin mapeo van al final por slot.
             # El iid sigue siendo el índice (la selección no cambia).
             self._fill_ps2_rows(p)
-            who = CHARACTERS.get(base[:4], '') if len(base)>=4 else ''
+            _vpid = _pid_of_bin(path)
+            who = CHARACTERS.get(_vpid, '')
+            if not who and len(base) >= 4:
+                who = CHARACTERS.get(base[:4], '')
             self.info_label.configure(text=f"{name} | PS2 HD/BD VAG {len(p['entries'])} samples")
             self.char_label.configure(text=who.upper() if who else name)
             self._update_char_icon(who)

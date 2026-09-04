@@ -117,6 +117,7 @@ Diferencias con la versión PS3/DC:
 - La lista, la extracción y el reempaque van en **orden de voz** (n.º de take = n.º de track DTPK, igual que la carpeta latina), aunque los slots vengan revueltos en el `.bin`.
 - El orden se obtiene por **puente DTPK por contenido**: cada slot se compara contra los samples del DTPK homónimo de PS3 (mismo idioma original) y de ahí sale track → take. La duración nunca ordena (solo indica si el take cabe en el slot).
 - La columna de estado dice cómo salió cada par: `puente`, `fijo oído`, `doblado` (el slot ya traía ese take), `revisar oído` o `sin wav`. Los takes que comparten sample/slot y las voces ausentes en el port se reportan en `_orden_latino.txt`.
+- Cubre los 59 personajes (`pl00`-`pl3a`) y el staff (`se_comn` con programas `prg00`/`prg01`, `se_staf`, `se_syuk`). En `se_comn` el port PS2 trae sobre todo el banco común (los takes `prg01_*` sin slot quedan reportados).
 
 Carpeta `FOR PS2/`:
 
