@@ -1041,3 +1041,14 @@ pl3a:24=0
 pl3a:26=0
 pl3a:28=0
 pl3a:29=0
+# Verificado por contenido (puente DTPK: sample idéntico, HD=2xSPD): el juego divide.
+pl02:4=1
+pl02:5=1
+pl02:15=1
+pl1f:25=1
+pl12:17=1
+pl12:19=1
+pl12:22=1
+# Verificado por contenido: HD directo (no mitad).
+pl16:0=0
+pl10:26=0

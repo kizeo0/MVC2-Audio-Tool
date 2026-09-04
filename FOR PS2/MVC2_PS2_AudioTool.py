@@ -881,7 +881,7 @@ GRUNT_TRACKS = {40, 41, 42, 43}
 
 # Versión del formato de caché del puente (por entrada: si cambia, se
 # reconstruye ese pid). Subir al cambiar criterios de match.
-BRIDGE_CACHE_V = 8
+BRIDGE_CACHE_V = 9
 
 
 def _sig_file(path):
@@ -1234,6 +1234,54 @@ def _voice_missing(bin_path, entries, track):
         return False
 
 
+_BRIDGE_DUB_WARN = {}
+
+def _bridge_is_dubbed(bin_path, vtracks, samp_pcm):
+    # ¿Este "puente" DTPK ya está DOBLADO (contiene los takes latinos)?
+    # Un puente doblado arruina el match: se rechaza con aviso.
+    # Solo cuenta si TODAS las voces probadas matchean (un pack real
+    # puede tener takes sin doblar, que matchean legítimamente).
+    try:
+        tests = []
+        for tnum in sorted(vtracks):
+            if tnum >= 30 or tnum in GRUNT_TRACKS:
+                continue
+            tinfo = vtracks[tnum]
+            if not tinfo['samples'] or not tinfo['rates']:
+                continue
+            smp = tinfo['samples'][0]
+            if smp not in samp_pcm:
+                continue
+            lat = None
+            for cand in _find_latino_wavs(bin_path):
+                m = re.search(r'_%02d\.wav$' % tnum, os.path.basename(cand), re.I)
+                if m:
+                    lat = cand
+                    break
+            if lat is None:
+                continue
+            tests.append((tnum, smp, sorted(tinfo['rates'])[0], lat))
+            if len(tests) >= 4:
+                break
+        if len(tests) < 3:
+            return False
+        hits = 0
+        for tnum, smp, rate, lat in tests:
+            try:
+                r = _wav_to_pcm_native(lat)
+                if not r:
+                    continue
+                wl = _pcm_to_list(resample_pcm16(r[0], r[1], rate))
+                sc, lag = _corr_screen(wl, samp_pcm[smp])
+                v = _corr_around(wl, samp_pcm[smp], lag) if sc >= 0.50 else sc
+                if v >= 0.85:
+                    hits += 1
+            except:
+                pass
+        return hits == len(tests)
+    except:
+        return False
+
 def dtpk_sample_sharing(bin_path):
     # {track: [tracks hermanos que comparten sample]} vía puente DTPK.
     # Solo parseo (rápido); sirve para explicar takes sin slot propio.
@@ -1384,8 +1432,10 @@ def _rank_slot_vs_samples(sl, e_rate, samp_pcm, samp_rates, tol=0.30):
 def _bridge_entry_to_res(ent, res):
     try:
         for k, v in ent['slots'].items():
+            sr = list(v[6]) if len(v) > 6 and isinstance(v[6], list) else []
             res[int(k)] = {'sample': v[0], 'track': v[1], 'tracks': v[2],
-                           'score': v[3], 'eff': v[4], 'method': v[5]}
+                           'score': v[3], 'eff': v[4], 'method': v[5],
+                           'srates': sr}
         return True
     except:
         return False
@@ -1472,6 +1522,16 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                     except:
                         pass
                 samp_pcm[s] = _pcm_to_list(pcm)
+        # Guardia: si el "puente" ya está doblado, rechazarlo (arruinaría
+        # el match). Solo fijos a oído en ese caso.
+        try:
+            if _bridge_is_dubbed(bin_path, vtracks, samp_pcm):
+                _BRIDGE_DUB_WARN[os.path.abspath(bin_path)] = True
+                log('AVISO: el DTPK puente parece DOBLADO (trae los takes latinos), no original.')
+                log('Se ignora el puente: solo pares verificados a oido. Usa DTPKs originales (DC/NAOMI/PS3 vanilla).')
+                return res
+        except:
+            pass
         # sample -> tracks (para colisiones y joins)
         sample_tracks = {}
         for tnum, tinfo in vtracks.items():
@@ -1500,7 +1560,8 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                 if not trks:
                     continue
                 res[s] = {'sample': smp, 'track': trks[0], 'tracks': trks,
-                          'score': round(best[0], 3), 'eff': best[1], 'method': 'dtpk'}
+                          'score': round(best[0], 3), 'eff': best[1], 'method': 'dtpk',
+                          'srates': sorted(samp_rates.get(smp, set()))}
                 continue
             # 2ª oportunidad: el port a veces retima el pitch (ej slot a
             # 8000 de un SPD 11025). Se lleva el slot a la tasa del SPD
@@ -1534,7 +1595,8 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                     if trks:
                         res[s] = {'sample': smp, 'track': trks[0], 'tracks': trks,
                                   'score': round(best2[0], 3), 'eff': best2[3],
-                                  'method': 'dtpk'}
+                                  'method': 'dtpk',
+                                  'srates': sorted(samp_rates.get(smp, set()))}
             except:
                 pass
             if log and (pos % 5 == 0 or pos + 1 == total):
@@ -1578,17 +1640,20 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                 if m:
                     tnum = int(m.group(1))
                     sib = [tnum]
+                    take_rates = set()
                     try:
                         ti = vtracks.get(tnum)
                         if ti:
                             for s2 in ti['samples']:
+                                take_rates.update(samp_rates.get(s2, set()))
                                 for t2 in sample_tracks.get(s2, []):
                                     if t2 not in sib:
                                         sib.append(t2)
                     except:
                         pass
                     res[s] = {'sample': None, 'track': tnum, 'tracks': sorted(sib),
-                              'score': round(best[0], 3), 'eff': best[2], 'method': 'dub'}
+                              'score': round(best[0], 3), 'eff': best[2], 'method': 'dub',
+                              'srates': sorted(take_rates)}
         # Completado 1:1: si queda UN slot libre y UN take sin cubrir (teniendo
         # en cuenta también los fijos a oído), se emparejan por contenido
         # (sin filtro de tasas) con compuertas estrictas; si no, queda para
@@ -1639,12 +1704,14 @@ def build_bridge_for_ps2(bin_path, entries, bd, log=None):
                             meth = None
                         if meth:
                             res[s] = {'sample': smp, 'track': tnum, 'tracks': [tnum],
-                                      'score': round(sc, 3), 'eff': top[0][1], 'method': meth}
+                                      'score': round(sc, 3), 'eff': top[0][1], 'method': meth,
+                                      'srates': sorted(samp_rates.get(smp, set()))}
                             log(f'  puente DTPK: slot {s:02d} <- take {tnum:02d} [{meth}, completado 1:1]')
         except:
             pass
         cache[sig] = {'v': BRIDGE_CACHE_V,
-                        'slots': {str(k): [v['sample'], v['track'], v['tracks'], v['score'], v['eff'], v['method']]
+                        'slots': {str(k): [v['sample'], v['track'], v['tracks'], v['score'], v['eff'], v['method'],
+                                           v.get('srates', [])]
                                 for k, v in res.items()}}
         _bridge_cache_save(cache)
     except Exception as ex:
@@ -1688,6 +1755,11 @@ def latino_map_lines(bin_path, entries):
     try:
         _br = find_dtpk_bridge(bin_path)
         lines.append(f'Puente DTPK: {os.path.basename(_br) if _br else "NO ENCONTRADO"}.')
+        try:
+            if _BRIDGE_DUB_WARN.get(os.path.abspath(bin_path)):
+                lines.append('PUENTE RECHAZADO: parece DOBLADO (no original). Solo fijos a oido.')
+        except:
+            pass
         lines.append('')
     except:
         pass
@@ -1818,6 +1890,7 @@ def _slot_divided(bin_path, slot):
 
 def _hd_is_half_family(hd_rate):
     # Heurística histórica: HD 18000/24000 (±3%) se tocan a mitad.
+    # Solo último recurso (sin div ni puente).
     try:
         if not hd_rate:
             return False
@@ -1831,12 +1904,42 @@ def _hd_is_half_family(hd_rate):
     except:
         return False
 
-def _ps2_true_rate(bin_path, slot, hd_rate):
-    # Tasa REAL a la que el juego toca el slot: HD/2 si divide, HD si no.
-    # Sin esto las voces divididas suenan a ardilla (ej pl02: HD 16000,
-    # juego a 8000). Fuente: ps2_map_div.txt; si no hay dato, heurística.
+def _rates_match(hd_rate, spd_rate, multiple=1, tol=0.15):
+    try:
+        if not hd_rate or not spd_rate:
+            return False
+        return abs(hd_rate - multiple * spd_rate) <= max(2, int(multiple * spd_rate * tol))
+    except:
+        return False
+
+def _ps2_is_divided(bin_path, slot, hd_rate, sample_rates=None):
+    # ¿El juego divide este slot (toca a HD/2)? Orden de evidencia:
+    # 1) ps2_map_div.txt (dato explícito), 2) puente (HD ≈ 2×SPD del
+    # sample), 3) heurística histórica. Retorna True/False/None.
     try:
         div = _slot_divided(bin_path, slot)
+    except:
+        div = None
+    if div is not None:
+        return div
+    try:
+        if sample_rates:
+            half = any(_rates_match(hd_rate, r, 2) for r in sample_rates)
+            full = any(_rates_match(hd_rate, r, 1) for r in sample_rates)
+            if half and not full:
+                return True
+            if full and not half:
+                return False
+    except:
+        pass
+    return None
+
+def _ps2_true_rate(bin_path, slot, hd_rate, sample_rates=None):
+    # Tasa REAL a la que el juego toca el slot: HD/2 si divide, HD si no.
+    # Sin esto las voces divididas suenan a ardilla (ej pl02: HD 16000,
+    # juego a 8000). Sin evidencia, heurística (comportamiento heredado).
+    try:
+        div = _ps2_is_divided(bin_path, slot, hd_rate, sample_rates)
     except:
         div = None
     if div is None:
@@ -3764,7 +3867,11 @@ class App:
         hd_rate = rates[idx] or e['rate']
         # El editor trabaja con samples: se audita a tasa REAL de juego
         # (dividida si toca; si no, ardilla). La cabecera VAG sigue en HD.
-        rate = _ps2_true_rate(self.session.get('path', ''), idx, hd_rate)
+        try:
+            _sr = ((self.session.get('bridge') or {}).get(idx, {}) or {}).get('srates')
+        except:
+            _sr = None
+        rate = _ps2_true_rate(self.session.get('path', ''), idx, hd_rate, _sr)
         current = self.session['repl'][idx]
         if current:
             _, _, raw_cur = current
@@ -3957,7 +4064,8 @@ class App:
                 is_blank = e['size'] <= 200
                 orden_txt, fname = self._ps2_disp(idx)
                 try:
-                    _tr = _ps2_true_rate(self.session.get('path', ''), idx, e['rate'])
+                    _sr = (bdet.get(idx, {}) or {}).get('srates')
+                    _tr = _ps2_true_rate(self.session.get('path', ''), idx, e['rate'], _sr)
                 except:
                     _tr = e['rate']
                 display_rate = f"{_tr} Hz" if _tr == e['rate'] else f"{_tr} Hz (HD {e['rate']})"
@@ -4300,13 +4408,17 @@ class App:
                 # La casilla 1/2 solo fuerza mitad en slots NO divididos de
                 # la familia 18/24k (test manual heredado).
                 is_repl = item is not None
+                try:
+                    _sr = ((self.session.get('bridge') or {}).get(idx, {}) or {}).get('srates')
+                except:
+                    _sr = None
                 if is_repl:
                     play_rate = rate
                 else:
-                    play_rate = _ps2_true_rate(self.session.get('path', ''), idx, rate)
+                    play_rate = _ps2_true_rate(self.session.get('path', ''), idx, rate, _sr)
                 half_note = ''
                 try:
-                    _div = _slot_divided(self.session.get('path', ''), idx)
+                    _div = _ps2_is_divided(self.session.get('path', ''), idx, rate, _sr)
                     if _div is None:
                         _div = _hd_is_half_family(rate)
                     if self.half_preview.get() and not _div and not is_repl and _hd_is_half_family(rate):

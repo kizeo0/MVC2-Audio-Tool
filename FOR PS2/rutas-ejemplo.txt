@@ -6,4 +6,6 @@
 # LATINO=F:\MVC2\LATINO PC\sound\se\mvc2
 
 # Carpeta con los DTPK de PS3 (puente para ordenar los slots por contenido):
+# TIENEN que ser ORIGINALES (DC/NAOMI/PS3 vanilla). Un mod ya doblado se
+# rechaza solo con aviso (arruinaría el match).
 # GDROM=C:\juego\UP0102-NPUB30068_00-MARVELVCAPCOM2FG\USRDIR\gdrom
