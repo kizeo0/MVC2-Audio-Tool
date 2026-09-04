@@ -1198,36 +1198,63 @@ def _bridge_cache_file():
     return os.path.join(app_dir(), 'ps2_bridge_cache.json')
 
 
-def _voice_missing(bin_path, entries, track):
-    # True si la voz del track DTPK no está en ningún slot (screen < 0.30).
-    # Solo se llama para takes sobrantes puntuales (rápido).
+def _digest_file():
+    return os.path.join(app_dir(), 'ps2_dtpk_digest.json')
+
+
+def _digest_load():
+    # Digest track->sample/tasas (independencia del DTPK). Junto al .py /
+    # EXE, o empaquetado. Retorna {} si no está.
     try:
-        bridge = find_dtpk_bridge(bin_path)
-        if not bridge:
+        with open(_digest_file(), encoding='utf-8') as f:
+            d = json.load(f)
+        if isinstance(d, dict) and d:
+            return d
+    except:
+        pass
+    try:
+        pf = resource_path('ps2_dtpk_digest.json')
+        if os.path.isfile(pf) and os.path.abspath(pf) != os.path.abspath(_digest_file()):
+            with open(pf, encoding='utf-8') as f:
+                d = json.load(f)
+            if isinstance(d, dict) and d:
+                return d
+    except:
+        pass
+    return {}
+
+
+def _digest_tracks(bin_path):
+    # {track: {'samples':[], 'rates':[]}} del pid (claves int). {} si no hay.
+    try:
+        base = os.path.splitext(os.path.basename(bin_path))[0]
+        pid = base.split('_')[0].lower()
+        dg = _digest_load()
+        ent = dg.get(pid)
+        if not isinstance(ent, dict):
+            return {}
+        tr = ent.get('tracks', {})
+        return {int(t): v for t, v in tr.items() if isinstance(v, dict)}
+    except:
+        return {}
+
+
+def _voice_missing(bin_path, entries, track):
+    # ¿La voz del track no está en ningún slot? Estructural (digest +
+    # mapa): el sample no lo contiene ningún slot mapeado. Sin DTPK/PCM.
+    try:
+        det = bridge_detail_for_bin(bin_path)
+        if not det:
             return False
-        data = open(bridge, 'rb').read()
-        vt = dtpk_voice_tracks(data)
-        tinfo = vt.get(track)
-        if not tinfo or len(tinfo['samples']) != 1:
+        dg = _digest_tracks(bin_path)
+        tinfo = dg.get(track)
+        if not tinfo or len(tinfo.get('samples', [])) != 1:
             return False
         smp = tinfo['samples'][0]
-        p = parse_dtpk(data)
-        e2 = next((x for x in p['entries'] if x['index'] == smp), None)
-        if e2 is None:
-            return False
-        rel = 0 if e2['bytes'] == len(data) - p['soff'] else e2['offset'] - p['soff']
-        raw = data[p['soff'] + rel: p['soff'] + rel + e2['bytes']]
-        sp = _pcm_to_list(decode_sample(e2['format'], e2['stereo'], raw))
-        bdata = open(bin_path, 'rb').read()
-        pp = parse_ps2_container(bdata)
-        for e in pp['entries']:
-            if e['size'] <= 200:
-                continue
-            sraw = pp['bd'][e['offset']:e['offset'] + e['size']]
-            if len(sraw) >= 16 and sraw[-16:] == bytes.fromhex('00 07 77 77 77 77 77 77 77 77 77 77 77 77 77 77'):
-                sraw = sraw[:-16]
-            sc, _lag = _corr_screen(_pcm_to_list(vag_to_pcm16(sraw)), sp)
-            if sc >= 0.30:
+        for d in det.values():
+            if d.get('sample') == smp:
+                return False
+            if track in (d.get('tracks') or []):
                 return False
         return True
     except:
@@ -1283,9 +1310,28 @@ def _bridge_is_dubbed(bin_path, vtracks, samp_pcm):
         return False
 
 def dtpk_sample_sharing(bin_path):
-    # {track: [tracks hermanos que comparten sample]} vía puente DTPK.
-    # Solo parseo (rápido); sirve para explicar takes sin slot propio.
+    # {track: [tracks hermanos que comparten sample]}. Primero digest
+    # (sin DTPK); si no hay, parseo del puente.
+    # Sirve para explicar takes sin slot propio.
     sharing = {}
+    try:
+        dg = _digest_tracks(bin_path)
+        if dg:
+            by_s = {}
+            for tnum, tinfo in dg.items():
+                for s in tinfo.get('samples', []):
+                    by_s.setdefault(s, []).append(tnum)
+            for tnum, tinfo in dg.items():
+                sibs = set()
+                for s in tinfo.get('samples', []):
+                    for t in by_s.get(s, []):
+                        if t != tnum:
+                            sibs.add(t)
+                if sibs:
+                    sharing[tnum] = sorted(sibs)
+            return sharing
+    except:
+        pass
     try:
         bridge = find_dtpk_bridge(bin_path)
         if not bridge:
@@ -1825,10 +1871,10 @@ def latino_map_lines(bin_path, entries):
             _home = [f"take {_b:02d}->slot {_slot_of_take[_b]:02d}" for _b in _sibs if _b in _slot_of_take]
             if _home:
                 lines.append(f"  + {os.path.basename(w)} [COMPARTE sample/slot con {', '.join(_home)}: mismo slot para ambos]")
-            elif _t is not None and _t not in _slot_of_take and _voice_missing(bin_path, entries, _t):
+            elif _t is not None and _t not in _slot_of_take and not free_slots and _voice_missing(bin_path, entries, _t):
                 lines.append(f"  + {os.path.basename(w)} [SIN SLOT: la voz no está en este .bin PS2 (revisar original/DTPK)]")
             else:
-                lines.append(f"  + {os.path.basename(w)}")
+                lines.append(f"  + {os.path.basename(w)} [revisar a oido]")
     if free_slots:
         lines.append('')
         lines.append(f"Slots SIN wav ({len(free_slots)}, se quedan originales):")
