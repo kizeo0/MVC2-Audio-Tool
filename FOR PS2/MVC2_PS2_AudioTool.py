@@ -3660,11 +3660,12 @@ class App:
         mid.pack(fill='both', expand=True, padx=8)
         cols = ('idx', 'file', 'fmt', 'size', 'rate', 'dur', 'state')
         self.tree = ttk.Treeview(mid, columns=cols, show='tree headings', height=11)
-        for c, w, t in (('idx', 50, 'Orden'), ('file', 110, 'Archivo'), ('fmt', 70, 'Formato'),
-                        ('size', 70, 'Tamano'), ('rate', 60, 'Tasa'), ('dur', 60, 'Dur(ms)'),
-                        ('state', 90, 'Estado')):
+        for c, w, t in (('idx', 50, 'Orden'), ('file', 210, 'Archivo'), ('fmt', 90, 'Formato'),
+                        ('size', 70, 'Tamano'), ('rate', 130, 'Tasa'), ('dur', 70, 'Dur(ms)'),
+                        ('state', 100, 'Estado')):
             self.tree.heading(c, text=t)
-            self.tree.column(c, width=w, anchor='center' if c == 'idx' else ('w' if c in ('file', 'fmt', 'state') else 'e'))
+            self.tree.column(c, width=w, minwidth=w, stretch=(c == 'file'),
+                             anchor='center' if c == 'idx' else ('w' if c in ('file', 'fmt', 'state') else 'e'))
         self.tree.column('#0', width=38, stretch=False, anchor='center')
         self.tree.tag_configure('repl_row', foreground='#0a8a0a')
         self.tree.pack(fill='both', expand=True)
