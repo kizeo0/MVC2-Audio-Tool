@@ -3574,7 +3574,7 @@ class App:
         self.gif_label = None
         self.gif_index = 0
         self.indicadores = {}
-        root.title('MVC2 Audio Tool v2')
+        root.title('MVC2 Audio Tool v3')
         _center_win(root, 880, 620)
         root.minsize(720, 520)
         self._set_icon(root)
