@@ -872,6 +872,7 @@ LATINO_PC_CANDIDATES = [r'F:\MVC2\LATINO PC\sound\se\mvc2']
 # los slots por CONTENIDO, sin usar duraciones). Se busca el .bin homónimo
 # con magia DTPK: primero junto al .bin PS2, luego en estas carpetas.
 DTPK_BRIDGE_CANDIDATES = [
+    r'F:\MVC2\PS3-DTPK-original',
     r'C:\Users\WinterOS\Downloads\Telegram Desktop\MARVEL VS CAPCOM 2 - MOD LATINO - 1.0 - NPUB30068\MARVEL VS CAPCOM 2 - MOD LATINO - 1.0 - NPUB30068\UP0102-NPUB30068_00-MARVELVCAPCOM2FG\USRDIR\gdrom',
 ]
 
