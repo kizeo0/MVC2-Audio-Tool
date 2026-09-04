@@ -1816,6 +1816,36 @@ def _slot_divided(bin_path, slot):
     except:
         return None
 
+def _hd_is_half_family(hd_rate):
+    # Heurística histórica: HD 18000/24000 (±3%) se tocan a mitad.
+    try:
+        if not hd_rate:
+            return False
+        if hd_rate in (18000, 24000):
+            return True
+        if abs(hd_rate - 18000) / 18000 < 0.03:
+            return True
+        if abs(hd_rate - 24000) / 24000 < 0.03:
+            return True
+        return False
+    except:
+        return False
+
+def _ps2_true_rate(bin_path, slot, hd_rate):
+    # Tasa REAL a la que el juego toca el slot: HD/2 si divide, HD si no.
+    # Sin esto las voces divididas suenan a ardilla (ej pl02: HD 16000,
+    # juego a 8000). Fuente: ps2_map_div.txt; si no hay dato, heurística.
+    try:
+        div = _slot_divided(bin_path, slot)
+    except:
+        div = None
+    if div is None:
+        div = _hd_is_half_family(hd_rate)
+    try:
+        return max(1, hd_rate // 2) if div else max(1, hd_rate)
+    except:
+        return hd_rate
+
 def _load_map_fix():
     # {(pid, slot): wav_basename}. Defaults + manual verificado.
     # Gana el manual (ps2_map_fix.txt). Formato: pl04:11=46.
@@ -3731,7 +3761,10 @@ class App:
         idx = int(sel[0])
         e = self.session['entries'][idx]
         rates = self.session.get('repl_rates') or [None]*len(self.session['entries'])
-        rate = rates[idx] or e['rate']
+        hd_rate = rates[idx] or e['rate']
+        # El editor trabaja con samples: se audita a tasa REAL de juego
+        # (dividida si toca; si no, ardilla). La cabecera VAG sigue en HD.
+        rate = _ps2_true_rate(self.session.get('path', ''), idx, hd_rate)
         current = self.session['repl'][idx]
         if current:
             _, _, raw_cur = current
@@ -3751,7 +3784,7 @@ class App:
         if result is None:
             return
         _, _, out_pcm = result
-        # Recodificar PCM editado -> VAG con wav2vag a la misma tasa
+        # Recodificar PCM editado -> VAG con wav2vag a la tasa HD
         wav2vag_path = resource_path('wav2vag.exe')
         if not os.path.isfile(wav2vag_path):
             wav2vag_path = shutil.which('wav2vag.exe') or os.path.join(os.path.dirname(__file__), 'wav2vag.exe')
@@ -3765,10 +3798,10 @@ class App:
             tmp_vag = f.name
         try:
             w = wave.open(tmp_wav, 'wb')
-            w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(hd_rate)
             w.writeframes(out_pcm); w.close()
             # wav2vag convierte WAV PCM16 (no raw): sin -sraw16
-            res = _run([wav2vag_path, tmp_wav, tmp_vag, f'-freq={rate}'],
+            res = _run([wav2vag_path, tmp_wav, tmp_vag, f'-freq={hd_rate}'],
                                  capture_output=True, text=True)
             if res.returncode != 0 or not os.path.exists(tmp_vag):
                 raise ValueError(f'wav2vag falló: {res.stdout} {res.stderr}')
@@ -3791,6 +3824,7 @@ class App:
         if 'repl_drate' not in self.session or len(self.session['repl_drate']) != len(self.session['entries']):
             self.session['repl_drate'] = [None]*len(self.session['entries'])
         # El trim no decide HD: conserva el ya elegido (o el original si es None)
+        self.session['repl_rates'][idx] = hd_rate
         self.session['repl_drate'][idx] = rate
         _hr = self.session.get('repl_rates', [None]*len(self.session['entries']))[idx]
         self.tree.set(str(idx), 'size', '%d B' % len(raw))
@@ -3922,8 +3956,12 @@ class App:
                 e = p['entries'][idx]
                 is_blank = e['size'] <= 200
                 orden_txt, fname = self._ps2_disp(idx)
-                display_rate = f"{e['rate']} Hz"
-                dur_ms = int(((e['size']-16)//16*28 / max(1,e['rate']) *1000) if e['size']>16 else 0)
+                try:
+                    _tr = _ps2_true_rate(self.session.get('path', ''), idx, e['rate'])
+                except:
+                    _tr = e['rate']
+                display_rate = f"{_tr} Hz" if _tr == e['rate'] else f"{_tr} Hz (HD {e['rate']})"
+                dur_ms = int(((e['size']-16)//16*28 / max(1,_tr) *1000) if e['size']>16 else 0)
                 if is_blank:
                     est = 'blank'
                 else:
@@ -4257,17 +4295,25 @@ class App:
                         self.log(f"Play VAG {idx:02d}: decoder python falló ({ex_py}) y sin fallback")
                         pcm = b"\x00\x00"*1024
                         via = 'silencio'
-                # Test ardilla: si el checkbox está activo y la tasa es 18000/24000,
-                # se escucha a mitad SIN tocar datos ni HD (solo audición).
-                play_rate = rate
+                # Tasa de juego: el ORIGINAL dividido se toca a HD/2 (si no,
+                # ardilla). Los reemplazos ya traen tasa de datos: tal cual.
+                # La casilla 1/2 solo fuerza mitad en slots NO divididos de
+                # la familia 18/24k (test manual heredado).
+                is_repl = item is not None
+                if is_repl:
+                    play_rate = rate
+                else:
+                    play_rate = _ps2_true_rate(self.session.get('path', ''), idx, rate)
                 half_note = ''
                 try:
-                    if self.half_preview.get() and (
-                            rate in (18000, 24000)
-                            or abs(rate - 18000) / 18000 < 0.03
-                            or abs(rate - 24000) / 24000 < 0.03):
+                    _div = _slot_divided(self.session.get('path', ''), idx)
+                    if _div is None:
+                        _div = _hd_is_half_family(rate)
+                    if self.half_preview.get() and not _div and not is_repl and _hd_is_half_family(rate):
                         play_rate = rate // 2
                         half_note = ' (preview 1/2 tasa)'
+                    elif play_rate != rate:
+                        half_note = ' (tasa de juego)'
                 except:
                     pass
                 self.log(f"Play VAG {idx:02d}: slot {e['size']}B rate_hd={e['rate']} rate_play={play_rate} via={via} pcm={len(pcm)}B{half_note}")
