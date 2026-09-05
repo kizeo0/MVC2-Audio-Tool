@@ -1150,10 +1150,22 @@ def _corr_best_lag(xa, xb, lagw, maxn):
     return best, best_lag
 
 
+def _decimate4(xa):
+    # Diezmado /4 con promedio (antialias): el [::4] directo aliasa los
+    # transitorios (SFX) y hunde el score (0.34 vs 0.79 medido).
+    try:
+        n4 = (len(xa) // 4) * 4
+        return [float(xa[i] + xa[i + 1] + xa[i + 2] + xa[i + 3]) * 0.25
+                for i in range(0, n4, 4)]
+    except:
+        return xa[::4]
+
+
 def _corr_screen(xa, xb):
-    # Cribado rápido: diezmado /4, lag ±32 (= ±128 nativo), 1600 muestras.
-    xs = xa[::4]
-    ys = xb[::4]
+    # Cribado rápido: diezmado /4 suavizado, lag ±32 (= ±128 nativo),
+    # 1600 muestras.
+    xs = _decimate4(xa)
+    ys = _decimate4(xb)
     return _corr_best_lag(xs, ys, 32, 1600)
 
 
